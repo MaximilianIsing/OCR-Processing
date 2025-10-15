@@ -1,0 +1,22 @@
+{
+  "name": "pdf-ocr-extractor",
+  "version": "1.0.0",
+  "description": "Extract text from PDF using OCR with parallel processing",
+  "main": "pdfOCR.js",
+  "scripts": {
+    "test": "node example.js"
+  },
+  "dependencies": {
+    "tesseract.js": "^5.1.1",
+    "pdf-poppler": "^0.2.1"
+  },
+  "keywords": [
+    "pdf",
+    "ocr",
+    "tesseract",
+    "text-extraction"
+  ],
+  "author": "",
+  "license": "ISC"
+}
+
