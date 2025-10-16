@@ -9,8 +9,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install Node.js dependencies (clean install)
-RUN npm ci --only=production || npm install
+# Install Node.js dependencies
+RUN npm install --production
 
 # Copy application files
 COPY . .
