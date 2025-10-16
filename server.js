@@ -104,6 +104,15 @@ app.post('/extract-text', upload.single('pdf'), async (req, res) => {
             }
         }
         
+        // Check if error is due to page limit
+        if (error.message.includes('Maximum allowed is 30 pages')) {
+            return res.status(400).json({
+                success: false,
+                error: 'PDF exceeds page limit',
+                message: error.message
+            });
+        }
+        
         res.status(500).json({
             success: false,
             error: 'Failed to process PDF',

@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const { createWorker } = require('tesseract.js');
 const { exec } = require('child_process');
 const { promisify } = require('util');
 
@@ -34,15 +33,20 @@ async function pdfToTextOCR(inputPdfPath, outputTxtPath) {
         
         console.log(`Found ${pageCount} pages in PDF`);
         
+        // Enforce 30 page limit
+        if (pageCount > 30) {
+            throw new Error(`PDF has ${pageCount} pages. Maximum allowed is 30 pages.`);
+        }
+        
         // Convert PDF to images using pdftoppm (part of poppler-utils)
-        // Using lower DPI (150 instead of 200) for faster processing and less memory
+        // Using JPEG with lower DPI for faster processing and less memory/disk usage
         console.log('Converting PDF to images for OCR...');
         const outputPrefix = path.join(tempDir, 'page');
-        await execAsync(`pdftoppm -png -r 150 "${inputPdfPath}" "${outputPrefix}"`);
+        await execAsync(`pdftoppm -jpeg -r 120 -jpegopt quality=85 "${inputPdfPath}" "${outputPrefix}"`);
         
         // Get list of generated image files
         const files = fs.readdirSync(tempDir)
-            .filter(file => file.startsWith('page') && file.endsWith('.png'))
+            .filter(file => file.startsWith('page') && file.endsWith('.jpg'))
             .sort((a, b) => {
                 const numA = parseInt(a.match(/\d+/)[0]);
                 const numB = parseInt(b.match(/\d+/)[0]);
@@ -52,7 +56,7 @@ async function pdfToTextOCR(inputPdfPath, outputTxtPath) {
         console.log(`Generated ${files.length} image files`);
         
         // Process pages in batches to avoid memory issues (important for Render free tier - 512MB limit)
-        const BATCH_SIZE = 15; // Process 3 pages at a time for balance of speed and memory
+        const BATCH_SIZE = 5; // Process 3 pages at a time - safe for 512MB memory limit
         const results = [];
         
         for (let i = 0; i < files.length; i += BATCH_SIZE) {
@@ -137,38 +141,26 @@ async function pdfToTextOCR(inputPdfPath, outputTxtPath) {
  * @returns {Promise<{index: number, text: string}>}
  */
 async function processPageOCR(imagePath, index, totalPages) {
-    let worker = null;
-    
     try {
         console.log(`Processing page ${index + 1}/${totalPages} with OCR...`);
         
-        const imageBuffer = fs.readFileSync(imagePath);
+        // Use native tesseract command (3-5x faster than tesseract.js)
+        const outputBasePath = imagePath.replace(/\.[^.]+$/, '');
+        const tesseractCmd = `tesseract "${imagePath}" "${outputBasePath}" -c tessedit_char_whitelist="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?;:()[]{}\'\\\"-_=+*/&%$#@~\\\`<>|\\\\" --psm 1 txt 2>&1`;
         
-        // Create Tesseract worker with fast settings
-        worker = await createWorker('eng', 1, {
-            // Disable logging for better performance
-            logger: () => {}
-        });
+        await execAsync(tesseractCmd);
         
-        // Configure Tesseract with optimized settings for speed
-        await worker.setParameters({
-            tessedit_pageseg_mode: '1', // Auto page segmentation with OSD (faster than mode 6)
-            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?;:()[]{}\'\"-_=+*/&%$#@~`<>|\\',
-            // Speed optimizations
-            tessjs_create_hocr: '0',
-            tessjs_create_tsv: '0',
-            tessjs_create_box: '0',
-            tessjs_create_unlv: '0',
-            tessjs_create_osd: '0'
-        });
+        // Read the output file
+        const textFilePath = `${outputBasePath}.txt`;
+        let text = '';
         
-        // Perform OCR
-        const { data: { text } } = await worker.recognize(imageBuffer);
+        if (fs.existsSync(textFilePath)) {
+            text = fs.readFileSync(textFilePath, 'utf8');
+            // Clean up the text file
+            fs.unlinkSync(textFilePath);
+        }
         
         console.log(`Page ${index + 1} complete`);
-        
-        // Cleanup worker
-        await worker.terminate();
         
         return {
             index: index,
@@ -177,15 +169,6 @@ async function processPageOCR(imagePath, index, totalPages) {
         
     } catch (error) {
         console.error(`Error processing page ${index + 1}:`, error);
-        
-        // Cleanup worker on error
-        if (worker) {
-            try {
-                await worker.terminate();
-            } catch (e) {
-                // Ignore cleanup errors
-            }
-        }
         
         // Return empty text on error but don't fail the whole process
         return {

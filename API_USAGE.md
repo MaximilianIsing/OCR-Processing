@@ -110,6 +110,7 @@ fetch('http://localhost:3000/extract-text', {
 ## Limitations
 
 - Maximum file size: **50MB**
+- Maximum pages: **30 pages**
 - Only PDF files are accepted
 - Processing time depends on:
   - Number of pages
@@ -118,7 +119,7 @@ fetch('http://localhost:3000/extract-text', {
 
 ## Error Codes
 
-- `400` - Bad request (no file, wrong file type, file too large)
+- `400` - Bad request (no file, wrong file type, file too large, too many pages)
 - `500` - Server error (processing failed)
 
 ## Local Development
