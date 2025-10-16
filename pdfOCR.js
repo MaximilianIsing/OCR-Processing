@@ -1,7 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 const { createWorker } = require('tesseract.js');
-const pdfPoppler = require('pdf-poppler');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+
+const execAsync = promisify(exec);
 
 /**
  * Extract text from PDF using OCR
@@ -20,17 +23,21 @@ async function pdfToTextOCR(inputPdfPath, outputTxtPath) {
         
         console.log(`Starting OCR extraction from: ${inputPdfPath}`);
         
-        // Convert PDF to images with lower quality for speed
-        const options = {
-            format: 'png',
-            out_dir: tempDir,
-            out_prefix: 'page',
-            page: null,
-            density: 200  // Lower density = faster
-        };
+        // Get page count first
+        const { stdout: pageInfo } = await execAsync(`pdfinfo "${inputPdfPath}"`);
+        const pageCountMatch = pageInfo.match(/Pages:\s+(\d+)/);
+        const pageCount = pageCountMatch ? parseInt(pageCountMatch[1]) : 0;
         
+        if (pageCount === 0) {
+            throw new Error('Could not determine page count from PDF');
+        }
+        
+        console.log(`Found ${pageCount} pages in PDF`);
+        
+        // Convert PDF to images using pdftoppm (part of poppler-utils)
         console.log('Converting PDF to images for OCR...');
-        await pdfPoppler.convert(inputPdfPath, options);
+        const outputPrefix = path.join(tempDir, 'page');
+        await execAsync(`pdftoppm -png -r 200 "${inputPdfPath}" "${outputPrefix}"`);
         
         // Get list of generated image files
         const files = fs.readdirSync(tempDir)
@@ -41,7 +48,7 @@ async function pdfToTextOCR(inputPdfPath, outputTxtPath) {
                 return numA - numB;
             });
         
-        console.log(`Found ${files.length} pages to process with OCR`);
+        console.log(`Generated ${files.length} image files`);
         
         // Process all pages in parallel
         const ocrPromises = files.map((file, index) => 
