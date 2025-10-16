@@ -35,9 +35,10 @@ async function pdfToTextOCR(inputPdfPath, outputTxtPath) {
         console.log(`Found ${pageCount} pages in PDF`);
         
         // Convert PDF to images using pdftoppm (part of poppler-utils)
+        // Using lower DPI (150 instead of 200) for faster processing and less memory
         console.log('Converting PDF to images for OCR...');
         const outputPrefix = path.join(tempDir, 'page');
-        await execAsync(`pdftoppm -png -r 200 "${inputPdfPath}" "${outputPrefix}"`);
+        await execAsync(`pdftoppm -png -r 150 "${inputPdfPath}" "${outputPrefix}"`);
         
         // Get list of generated image files
         const files = fs.readdirSync(tempDir)
@@ -50,28 +51,38 @@ async function pdfToTextOCR(inputPdfPath, outputTxtPath) {
         
         console.log(`Generated ${files.length} image files`);
         
-        // Process all pages in parallel
-        const ocrPromises = files.map((file, index) => 
-            processPageOCR(path.join(tempDir, file), index, files.length)
-        );
+        // Process pages in batches to avoid memory issues (important for Render free tier - 512MB limit)
+        const BATCH_SIZE = 15; // Process 3 pages at a time for balance of speed and memory
+        const results = [];
         
-        // Wait for all pages to complete
-        const results = await Promise.all(ocrPromises);
+        for (let i = 0; i < files.length; i += BATCH_SIZE) {
+            const batch = files.slice(i, i + BATCH_SIZE);
+            console.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(files.length / BATCH_SIZE)}`);
+            
+            const batchPromises = batch.map((file, batchIndex) => {
+                const globalIndex = i + batchIndex;
+                const imagePath = path.join(tempDir, file);
+                return processPageOCR(imagePath, globalIndex, files.length);
+            });
+            
+            const batchResults = await Promise.all(batchPromises);
+            results.push(...batchResults);
+            
+            // Delete processed images immediately to free up memory/disk
+            batch.forEach(file => {
+                try {
+                    fs.unlinkSync(path.join(tempDir, file));
+                } catch (e) {
+                    // Ignore deletion errors
+                }
+            });
+        }
         
         // Sort by index and combine text
         results.sort((a, b) => a.index - b.index);
         const fullText = results.map(r => r.text).join(' ');
         
-        // Clean up temp files
-        files.forEach(file => {
-            try {
-                fs.unlinkSync(path.join(tempDir, file));
-            } catch (e) {
-                console.error(`Error deleting ${file}:`, e.message);
-            }
-        });
-        
-        // Remove temp directory
+        // Remove temp directory (images already deleted during processing)
         try {
             fs.rmdirSync(tempDir);
         } catch (e) {
@@ -133,13 +144,22 @@ async function processPageOCR(imagePath, index, totalPages) {
         
         const imageBuffer = fs.readFileSync(imagePath);
         
-        // Create Tesseract worker
-        worker = await createWorker('eng');
+        // Create Tesseract worker with fast settings
+        worker = await createWorker('eng', 1, {
+            // Disable logging for better performance
+            logger: () => {}
+        });
         
-        // Configure Tesseract with optimized settings
+        // Configure Tesseract with optimized settings for speed
         await worker.setParameters({
-            tessedit_pageseg_mode: '6',
-            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?;:()[]{}\'\"-_=+*/&%$#@~`<>|\\'
+            tessedit_pageseg_mode: '1', // Auto page segmentation with OSD (faster than mode 6)
+            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?;:()[]{}\'\"-_=+*/&%$#@~`<>|\\',
+            // Speed optimizations
+            tessjs_create_hocr: '0',
+            tessjs_create_tsv: '0',
+            tessjs_create_box: '0',
+            tessjs_create_unlv: '0',
+            tessjs_create_osd: '0'
         });
         
         // Perform OCR
