@@ -1,11 +1,7 @@
 FROM node:18
 
-# Install poppler-utils and tesseract-ocr (native tesseract is 3-5x faster than tesseract.js)
-RUN apt-get update && apt-get install -y \
-    poppler-utils \
-    tesseract-ocr \
-    tesseract-ocr-eng \
-    && rm -rf /var/lib/apt/lists/*
+# Install poppler-utils (required for pdf-poppler on Linux)
+RUN apt-get update && apt-get install -y poppler-utils && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
@@ -13,8 +9,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install Node.js dependencies
-RUN npm install
+# Install Node.js dependencies (clean install)
+RUN npm ci --only=production || npm install
 
 # Copy application files
 COPY . .
