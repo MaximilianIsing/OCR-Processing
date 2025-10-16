@@ -4,6 +4,7 @@ package-lock.json
 
 # Temporary files
 temp_ocr/
+uploads/
 *.tmp
 
 # Output files

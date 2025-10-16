@@ -18,6 +18,6 @@ COPY . .
 # Expose port (Render will set PORT env variable)
 EXPOSE 3000
 
-# Run the application
-CMD ["node", "example.js"]
+# Run the API server
+CMD ["node", "server.js"]
 
