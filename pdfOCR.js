@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { createWorker } = require('tesseract.js');
 const { exec } = require('child_process');
 const { promisify } = require('util');
 
@@ -56,30 +57,63 @@ async function pdfToTextOCR(inputPdfPath, outputTxtPath) {
         console.log(`Generated ${files.length} image files`);
         
         // Process pages in batches to avoid memory issues (important for Render free tier - 512MB limit)
-        const BATCH_SIZE = 5; // Process 3 pages at a time - safe for 512MB memory limit
+        const BATCH_SIZE = 5; // Process 5 pages at a time - safe for 512MB memory limit
         const results = [];
         
-        for (let i = 0; i < files.length; i += BATCH_SIZE) {
-            const batch = files.slice(i, i + BATCH_SIZE);
-            console.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(files.length / BATCH_SIZE)}`);
-            
-            const batchPromises = batch.map((file, batchIndex) => {
-                const globalIndex = i + batchIndex;
-                const imagePath = path.join(tempDir, file);
-                return processPageOCR(imagePath, globalIndex, files.length);
+        // Create worker pool upfront (reuse workers for much better performance)
+        console.log(`Creating pool of ${BATCH_SIZE} Tesseract workers...`);
+        const workers = [];
+        for (let i = 0; i < BATCH_SIZE; i++) {
+            const worker = await createWorker('eng', 1, {
+                logger: () => {} // Disable logging for better performance
             });
-            
-            const batchResults = await Promise.all(batchPromises);
-            results.push(...batchResults);
-            
-            // Delete processed images immediately to free up memory/disk
-            batch.forEach(file => {
+            await worker.setParameters({
+                tessedit_pageseg_mode: '1',
+                tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?;:()[]{}\'\"-_=+*/&%$#@~`<>|\\',
+                tessjs_create_hocr: '0',
+                tessjs_create_tsv: '0',
+                tessjs_create_box: '0',
+                tessjs_create_unlv: '0',
+                tessjs_create_osd: '0'
+            });
+            workers.push(worker);
+        }
+        console.log('Worker pool ready!');
+        
+        try {
+            for (let i = 0; i < files.length; i += BATCH_SIZE) {
+                const batch = files.slice(i, i + BATCH_SIZE);
+                console.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(files.length / BATCH_SIZE)}`);
+                
+                const batchPromises = batch.map((file, batchIndex) => {
+                    const globalIndex = i + batchIndex;
+                    const imagePath = path.join(tempDir, file);
+                    const worker = workers[batchIndex]; // Reuse worker from pool
+                    return processPageOCRWithWorker(imagePath, globalIndex, files.length, worker);
+                });
+                
+                const batchResults = await Promise.all(batchPromises);
+                results.push(...batchResults);
+                
+                // Delete processed images immediately to free up memory/disk
+                batch.forEach(file => {
+                    try {
+                        fs.unlinkSync(path.join(tempDir, file));
+                    } catch (e) {
+                        // Ignore deletion errors
+                    }
+                });
+            }
+        } finally {
+            // Cleanup worker pool
+            console.log('Cleaning up worker pool...');
+            for (const worker of workers) {
                 try {
-                    fs.unlinkSync(path.join(tempDir, file));
+                    await worker.terminate();
                 } catch (e) {
-                    // Ignore deletion errors
+                    // Ignore cleanup errors
                 }
-            });
+            }
         }
         
         // Sort by index and combine text
@@ -99,9 +133,7 @@ async function pdfToTextOCR(inputPdfPath, outputTxtPath) {
         // Write to output file
         fs.writeFileSync(outputTxtPath, cleanedText, 'utf8');
         
-        console.log('\n=== FULL OCR EXTRACTED TEXT ===');
-        console.log(cleanedText);
-        console.log('=== END OF OCR TEXT ===\n');
+        console.log(`\nOCR complete! Extracted ${cleanedText.length} characters from ${files.length} pages.`);
         console.log(`Text saved to: ${outputTxtPath}`);
         
         return {
@@ -134,31 +166,21 @@ async function pdfToTextOCR(inputPdfPath, outputTxtPath) {
 }
 
 /**
- * Process a single page with OCR
+ * Process a single page with OCR using a pre-initialized worker
  * @param {string} imagePath - Path to image file
  * @param {number} index - Page index
  * @param {number} totalPages - Total number of pages
+ * @param {Worker} worker - Pre-initialized Tesseract worker to reuse
  * @returns {Promise<{index: number, text: string}>}
  */
-async function processPageOCR(imagePath, index, totalPages) {
+async function processPageOCRWithWorker(imagePath, index, totalPages, worker) {
     try {
         console.log(`Processing page ${index + 1}/${totalPages} with OCR...`);
         
-        // Use native tesseract command (3-5x faster than tesseract.js)
-        const outputBasePath = imagePath.replace(/\.[^.]+$/, '');
-        const tesseractCmd = `tesseract "${imagePath}" "${outputBasePath}" -c tessedit_char_whitelist="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?;:()[]{}\'\\\"-_=+*/&%$#@~\\\`<>|\\\\" --psm 1 txt 2>&1`;
+        const imageBuffer = fs.readFileSync(imagePath);
         
-        await execAsync(tesseractCmd);
-        
-        // Read the output file
-        const textFilePath = `${outputBasePath}.txt`;
-        let text = '';
-        
-        if (fs.existsSync(textFilePath)) {
-            text = fs.readFileSync(textFilePath, 'utf8');
-            // Clean up the text file
-            fs.unlinkSync(textFilePath);
-        }
+        // Perform OCR using the provided worker (already configured)
+        const { data: { text } } = await worker.recognize(imageBuffer);
         
         console.log(`Page ${index + 1} complete`);
         
