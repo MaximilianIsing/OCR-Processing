@@ -157,7 +157,7 @@ async function processPageOCR(imagePath, index, totalPages) {
         
         // Configure Tesseract with optimized settings for speed
         await worker.setParameters({
-            tessedit_pageseg_mode: '1', // Auto page segmentation with OSD (faster than mode 6)
+            tessedit_pageseg_mode: '3', // Fully automatic page segmentation (no OSD required)
             tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?;:()[]{}\'\"-_=+*/&%$#@~`<>|\\',
             // Speed optimizations
             tessjs_create_hocr: '0',
